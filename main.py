@@ -9,6 +9,14 @@ from chapito.tools.tools import create_driver, close_browser
 from chapito.openai_chat import chat_with_gpt
 from chapito.anthropic_chat import chat_with_claude
 from chapito.grok_chat import chat_with_grok
+from chapito.ai_studio_chat import chat_with_ai_studio
+from chapito.deepseek_chat import chat_with_deepseek
+from chapito.duckduckgo_chat import chat_with_duckduckgo
+from chapito.gemini_chat import chat_with_gemini
+from chapito.kimi_chat import chat_with_kimi
+from chapito.mistral_chat import chat_with_mistral
+from chapito.perplexity_chat import chat_with_perplexity
+from chapito.qwen_chat import chat_with_qwen
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -23,8 +31,7 @@ page = None
 
 class ChatRequest(BaseModel):
     message: str
-    model: str = "gpt"  # Default to GPT
-    timeout: Optional[int] = 120
+    model: str
 
 
 class ChatResponse(BaseModel):
@@ -81,13 +88,31 @@ async def chat_endpoint(request: ChatRequest):
         if not await initialize_browser():
             raise HTTPException(status_code=500, detail="Failed to initialize browser")
         
+        model_lower = request.model.lower()
+        
         # Route to appropriate chatbot based on model
-        if request.model.lower() == "gpt":
+        if model_lower == "gpt":
             response = await chat_with_gpt(page, request.message)
-        elif request.model.lower() == "claude":
+        elif model_lower == "claude":
             response = await chat_with_claude(page, request.message)
-        elif request.model.lower() == "grok":
+        elif model_lower == "grok":
             response = await chat_with_grok(page, request.message)
+        elif model_lower == "ai_studio":
+            response = await chat_with_ai_studio(page, request.message)
+        elif model_lower == "deepseek":
+            response = await chat_with_deepseek(page, request.message)
+        elif model_lower == "duckduckgo":
+            response = await chat_with_duckduckgo(page, request.message)
+        elif model_lower == "gemini":
+            response = await chat_with_gemini(page, request.message)
+        elif model_lower == "kimi":
+            response = await chat_with_kimi(page, request.message)
+        elif model_lower == "mistral":
+            response = await chat_with_mistral(page, request.message)
+        elif model_lower == "perplexity":
+            response = await chat_with_perplexity(page, request.message)
+        elif model_lower == "qwen":
+            response = await chat_with_qwen(page, request.message)
         else:
             raise HTTPException(status_code=400, detail=f"Unsupported model: {request.model}")
         
@@ -127,10 +152,18 @@ async def health_check():
 async def get_models():
     """Get available AI models."""
     return {
-        "models": [
-            {"id": "gpt", "name": "OpenAI GPT", "url": "https://chatgpt.com/"},
-            {"id": "claude", "name": "Anthropic Claude", "url": "https://claude.ai/"},
-            {"id": "grok", "name": "xAI Grok", "url": "https://grok.com/"}
+        "supported_models": [
+            "gpt",
+            "claude", 
+            "grok",
+            "ai_studio",
+            "deepseek",
+            "duckduckgo",
+            "gemini",
+            "kimi",
+            "mistral",
+            "perplexity",
+            "qwen"
         ]
     }
 

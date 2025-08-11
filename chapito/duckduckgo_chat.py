@@ -1,13 +1,12 @@
 import time
 import logging
+import asyncio
 import pyperclip
-from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
-from selenium.webdriver.common.by import By
 from bs4 import BeautifulSoup, Tag
 
 from chapito.config import Config
-from chapito.tools.tools import create_driver, transfer_prompt
+from chapito.tools.tools import create_driver, transfer_prompt, wait_for_element, find_element, click_element, wait_for_element_visible, wait_for_element_clickable, navigate_to, get_page_source, close_browser, execute_script
+from pydoll.constants import By
 
 URL: str = "https://duck.ai/"
 TIMEOUT_SECONDS: int = 120
@@ -15,103 +14,197 @@ SUBMIT_CSS_SELECTOR: str = 'button[type="submit"][aria-label="Send"]'
 ANSWER_XPATH: str = "//div[@heading]"
 
 
-def check_if_chat_loaded(driver) -> bool:
-    driver.implicitly_wait(5)
+async def check_if_chat_loaded(page) -> bool:
     try:
-        button = driver.find_element(By.CSS_SELECTOR, SUBMIT_CSS_SELECTOR)
+        button = await wait_for_element(page, By.CSS_SELECTOR, SUBMIT_CSS_SELECTOR, timeout=5)
+        return button is not None
     except Exception as e:
-        logging.warning("Can't find submit button in chat interface. Maybe it's not loaded yet.")
+        logging.error(f"Error checking if chat loaded: {e}")
         return False
-    return button is not None
 
 
-def initialize_driver(config: Config):
-    logging.info("Initializing browser for DeepSeek...")
-    driver = create_driver(config)
-    driver.get(URL)
-
-    while not check_if_chat_loaded(driver):
-        logging.info("Waiting for chat interface to load...")
-        time.sleep(5)
-    logging.info("Browser initialized")
-    return driver
-
-
-def send_request_and_get_response(driver, message):
-    logging.debug("Send request to chatbot interface")
-    driver.implicitly_wait(10)
-    textarea = driver.find_element(By.TAG_NAME, "textarea")
-    transfer_prompt(message, textarea)
-    wait = WebDriverWait(driver, TIMEOUT_SECONDS)
-    wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, SUBMIT_CSS_SELECTOR)))
-    time.sleep(1)
-    submit_buttons = driver.find_elements(By.CSS_SELECTOR, SUBMIT_CSS_SELECTOR)
-    submit_button = submit_buttons[-1]
-    logging.debug("Push submit button")
-    submit_button.click()
-
-    # Wait a little time to avoid early fail.
-    time.sleep(1)
-
-    # Wait for submit button to be available. It means answer is finished.
-    wait = WebDriverWait(driver, TIMEOUT_SECONDS)
-    wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, SUBMIT_CSS_SELECTOR)))
-    scroll_down(driver)
-    message = ""
-    remaining_attemps = 5
-    while not message and remaining_attemps > 0:
-        time.sleep(1)
-        message = get_answer_from_copy_button(driver)
-        remaining_attemps -= 1
-
-    if not message:
-        logging.warning("No message found.")
-        return ""
-    clean_message = clean_chat_answer(message)
-    logging.debug(f"Clean message ends with: {clean_message[-100:]}")
-    return clean_message
+async def wait_for_chat_to_load(page) -> bool:
+    """Wait for the chat interface to fully load."""
+    start_time = time.time()
+    while time.time() - start_time < TIMEOUT_SECONDS:
+        if await check_if_chat_loaded(page):
+            logging.info("Chat interface loaded successfully")
+            return True
+        await asyncio.sleep(1)
+    
+    logging.error("Chat interface failed to load within timeout")
+    return False
 
 
-def scroll_down(driver):
-    form_element = driver.find_element(By.XPATH, "//form[@autocomplete='off']")
-    div_element = form_element.find_element(By.XPATH, "./ancestor::div[1]")
-    if scrollable_div := div_element.find_element(By.TAG_NAME, "div"):
-        driver.execute_script("arguments[0].scrollTop = arguments[0].scrollHeight", scrollable_div)
-    else:
-        logging.warning("No scrollable div found.")
-
-
-def get_answer_from_copy_button(driver) -> str:
-    message_bubbles = driver.find_elements(By.XPATH, ANSWER_XPATH)
-    if not message_bubbles:
-        logging.warning("No message found.")
-        return ""
-    last_message_bubble = message_bubbles[-1]
-    copy_button = last_message_bubble.find_element(By.XPATH, "//*[@data-copyairesponse='true']")
+async def send_message(page, message: str) -> bool:
+    """Send a message to the chat interface."""
     try:
-        copy_button.click()
+        # Find and click the textarea
+        textarea = await page.find(by=By.TAG_NAME, value="textarea")
+        if not textarea:
+            logging.error("No textarea found")
+            return False
+        
+        await textarea.click()
+        await textarea.insert_text(message)
+        
+        # Find and click the submit button
+        submit_buttons = await page.find(by=By.CSS_SELECTOR, value=SUBMIT_CSS_SELECTOR, find_all=True)
+        if not submit_buttons:
+            logging.error("Submit button not found")
+            return False
+        
+        submit_button = submit_buttons[-1]  # Use the last submit button
+        await click_element(submit_button)
+        logging.info("Message sent successfully")
+        return True
+        
     except Exception as e:
-        logging.warning("Error clicking copy button:", e)
+        logging.error(f"Error sending message: {e}")
+        return False
+
+
+async def wait_for_response(page) -> bool:
+    """Wait for the AI response to appear."""
+    try:
+        start_time = time.time()
+        while time.time() - start_time < TIMEOUT_SECONDS:
+            # Check if response has appeared
+            response_elements = await page.find(by=By.XPATH, value=ANSWER_XPATH, find_all=True)
+            if response_elements:
+                logging.info("Response received")
+                return True
+            
+            await asyncio.sleep(1)
+        
+        logging.error("Response timeout")
+        return False
+        
+    except Exception as e:
+        logging.error(f"Error waiting for response: {e}")
+        return False
+
+
+async def scroll_down(page):
+    """Scroll down to see the latest response."""
+    try:
+        form_element = await page.find(by=By.XPATH, value="//form[@autocomplete='off']")
+        if form_element:
+            div_element = await form_element.find(by=By.XPATH, value="./ancestor::div[1]")
+            if div_element:
+                scrollable_div = await div_element.find(by=By.TAG_NAME, value="div")
+                if scrollable_div:
+                    await execute_script(page, "arguments[0].scrollTop = arguments[0].scrollHeight", scrollable_div)
+                else:
+                    logging.warning("No scrollable div found.")
+    except Exception as e:
+        logging.warning(f"Error scrolling down: {e}")
+
+
+async def get_answer_from_copy_button(page) -> str:
+    """Get the answer by clicking the copy button and reading from clipboard."""
+    try:
+        message_bubbles = await page.find(by=By.XPATH, value=ANSWER_XPATH, find_all=True)
+        if not message_bubbles:
+            logging.warning("No message found.")
+            return ""
+        
+        last_message_bubble = message_bubbles[-1]
+        copy_button = await last_message_bubble.find(by=By.XPATH, value="//*[@data-copyairesponse='true']")
+        
+        if copy_button:
+            await click_element(copy_button)
+            await asyncio.sleep(0.5)  # Wait for clipboard to be updated
+            return pyperclip.paste()
+        else:
+            logging.warning("Copy button not found")
+            return ""
+            
+    except Exception as e:
+        logging.warning(f"Error getting answer from copy button: {e}")
         return ""
-    return pyperclip.paste()
+
+
+async def get_last_response(page) -> str:
+    """Get the last AI response text."""
+    try:
+        # Scroll down to see the latest response
+        await scroll_down(page)
+        
+        # Try to get answer from copy button
+        message = ""
+        remaining_attempts = 5
+        while not message and remaining_attempts > 0:
+            await asyncio.sleep(1)
+            message = await get_answer_from_copy_button(page)
+            remaining_attempts -= 1
+
+        if not message:
+            logging.warning("No message found.")
+            return ""
+        
+        clean_message = clean_chat_answer(message)
+        return clean_message
+        
+    except Exception as e:
+        logging.error(f"Error getting last response: {e}")
+        return ""
 
 
 def clean_chat_answer(text: str) -> str:
     return text.replace("\r\n", "\n").strip()
 
 
-def main():
-    driver = initialize_driver(Config())
+async def chat_with_duckduckgo(page, message: str) -> str:
+    """Main function to chat with DuckDuckGo AI."""
     try:
-        while True:
-            user_request = input("Ask something (or 'quit'): ")
-            if user_request.lower() == "quit":
-                break
-            response = send_request_and_get_response(driver, user_request)
-            print("Answer:", response)
+        # Send the message
+        if not await send_message(page, message):
+            return "Error: Failed to send message"
+        
+        # Wait for response
+        if not await wait_for_response(page):
+            return "Error: Response timeout"
+        
+        # Get the response
+        response = await get_last_response(page)
+        
+        return response
+        
+    except Exception as e:
+        logging.error(f"Error in chat_with_duckduckgo: {e}")
+        return f"Error: {str(e)}"
+
+
+async def main():
+    """Main function to demonstrate the chat functionality."""
+    browser = None
+    try:
+        # Create browser
+        browser = await create_driver()
+        page = await browser.get_page()
+        
+        # Navigate to DuckDuckGo AI
+        if not await navigate_to(page, URL):
+            logging.error("Failed to navigate to DuckDuckGo AI")
+            return
+        
+        # Wait for chat to load
+        if not await wait_for_chat_to_load(page):
+            logging.error("Chat failed to load")
+            return
+        
+        # Example chat
+        message = "Hello! How are you today?"
+        response = await chat_with_duckduckgo(page, message)
+        print(f"DuckDuckGo AI Response: {response}")
+        
+    except Exception as e:
+        logging.error(f"Error in main: {e}")
     finally:
-        driver.quit()
+        if browser:
+            await close_browser(browser)
 
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())
