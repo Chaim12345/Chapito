@@ -9,7 +9,7 @@ dependencies = [
     "fastapi>=0.115.11",
     "pyperclip>=1.9.0",
     "requests>=2.32.3",
-    "pydoll-python",
+    "pydoll @ git+https://github.com/autoscrape-labs/pydoll.git",
     "uvicorn>=0.34.0",
 ]
 

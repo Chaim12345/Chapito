@@ -1,14 +1,16 @@
 import os
 import platform
 import time
+import asyncio
 from chapito.config import Config
 from chapito.types import OsType
 import pyperclip
 import logging
 import requests
 import re
-# Import pydoll-python instead of selenium
-import pydoll_python as pydoll
+# Import pydoll instead of selenium
+from pydoll.browser import Chrome
+from pydoll.constants import By, Key
 
 
 def get_os() -> OsType:
@@ -20,48 +22,206 @@ def get_os() -> OsType:
     return OsType.MACOS if platform.system() == "Darwin" else OsType.LINUX
 
 
-def paste(textarea):
-    logging.debug("Paste prompt")
-    textarea.click()
-    if get_os() == OsType.MACOS:
-        textarea.send_keys(pydoll.Keys.COMMAND, "v")
-    else:
-        textarea.send_keys(pydoll.Keys.CONTROL, "v")
-
-
-def transfer_prompt(message, textarea) -> None:
-    logging.debug("Transfering prompt to chatbot interface")
-    usePaste = True
-    if usePaste:
-        pyperclip.copy(message)
-        paste(textarea)
-    else:
-        # Send message line by line
-        for line in message.split("\n"):
-            # Don't send "\t" to browser to avoid focus change.
-            textarea.send_keys(line.replace("\t", "    "))
-            # Don't send "\n" to browser to avoid early submition.
-            textarea.send_keys(pydoll.Keys.SHIFT, pydoll.Keys.ENTER)
-    time.sleep(0.5)
-    logging.debug("Prompt transfered")
-
-
-def create_driver(config: Config):
-    # Initialize pydoll browser with configuration
-    browser_options = {
-        "user_agent": config.browser_user_agent,
-        "headless": False,  # Start maximized
-        "disable_automation": True,  # Disable automation detection
-    }
-    
-    if config.use_browser_profile:
-        browser_profile_path = os.path.abspath(config.browser_profile_path)
-        os.makedirs(browser_profile_path, exist_ok=True)
-        browser_options["user_data_dir"] = browser_profile_path
-    
-    # Create pydoll browser instance
-    browser = pydoll.Browser(options=browser_options)
+async def create_driver() -> Chrome:
+    """Create and return a pydoll Chrome browser instance."""
+    browser = Chrome()
+    await browser.start()
     return browser
+
+
+async def paste(textarea):
+    logging.debug("Paste prompt")
+    await textarea.click()
+    if get_os() == OsType.MACOS:
+        await textarea.press_keyboard_key(Key.META, interval=0.1)
+        await textarea.press_keyboard_key(Key.KEY_V, interval=0.1)
+    else:
+        await textarea.press_keyboard_key(Key.CONTROL, interval=0.1)
+        await textarea.press_keyboard_key(Key.KEY_V, interval=0.1)
+
+
+async def transfer_prompt(message, textarea) -> None:
+    logging.debug("Transfering prompt to textarea")
+    await textarea.click()
+    await textarea.insert_text(message)
+
+
+async def wait_for_element(page, by: By, value: str, timeout: int = 10):
+    """Wait for an element to be present on the page."""
+    try:
+        element = await page.find_or_wait_element(by, value, timeout=timeout)
+        return element
+    except Exception as e:
+        logging.error(f"Element not found: {e}")
+        return None
+
+
+async def find_element(page, by: By, value: str):
+    """Find a single element on the page."""
+    try:
+        element = await page.find(by=by, value=value)
+        return element
+    except Exception as e:
+        logging.error(f"Element not found: {e}")
+        return None
+
+
+async def find_elements(page, by: By, value: str):
+    """Find multiple elements on the page."""
+    try:
+        elements = await page.find(by=by, value=value, find_all=True)
+        return elements
+    except Exception as e:
+        logging.error(f"Elements not found: {e}")
+        return []
+
+
+async def click_element(element):
+    """Click on an element."""
+    try:
+        await element.click()
+        return True
+    except Exception as e:
+        logging.error(f"Failed to click element: {e}")
+        return False
+
+
+async def send_keys(element, text: str):
+    """Send text to an element."""
+    try:
+        await element.insert_text(text)
+        return True
+    except Exception as e:
+        logging.error(f"Failed to send keys: {e}")
+        return False
+
+
+async def get_text(element):
+    """Get text from an element."""
+    try:
+        return await element.text
+    except Exception as e:
+        logging.error(f"Failed to get text: {e}")
+        return ""
+
+
+async def get_attribute(element, attribute: str):
+    """Get attribute value from an element."""
+    try:
+        return element.get_attribute(attribute)
+    except Exception as e:
+        logging.error(f"Failed to get attribute: {e}")
+        return None
+
+
+async def is_element_present(page, by: By, value: str):
+    """Check if an element is present on the page."""
+    try:
+        element = await page.find(by=by, value=value, raise_exc=False)
+        return element is not None
+    except Exception:
+        return False
+
+
+async def wait_for_page_load(page, timeout: int = 30):
+    """Wait for the page to fully load."""
+    try:
+        # Wait for the page to be ready
+        await asyncio.sleep(2)  # Basic wait
+        return True
+    except Exception as e:
+        logging.error(f"Page load timeout: {e}")
+        return False
+
+
+async def execute_script(page, script: str):
+    """Execute JavaScript on the page."""
+    try:
+        result = await page.execute_script(script)
+        return result
+    except Exception as e:
+        logging.error(f"Failed to execute script: {e}")
+        return None
+
+
+async def take_screenshot(page, path: str = None):
+    """Take a screenshot of the current page."""
+    try:
+        if path:
+            await page.take_screenshot(path=path)
+        else:
+            return await page.take_screenshot(as_base64=True)
+    except Exception as e:
+        logging.error(f"Failed to take screenshot: {e}")
+        return None
+
+
+async def close_browser(browser):
+    """Close the browser."""
+    try:
+        await browser.stop()
+    except Exception as e:
+        logging.error(f"Failed to close browser: {e}")
+
+
+async def get_page_source(page):
+    """Get the page source."""
+    try:
+        return await page.page_source
+    except Exception as e:
+        logging.error(f"Failed to get page source: {e}")
+        return ""
+
+
+async def get_current_url(page):
+    """Get the current URL."""
+    try:
+        return await page.current_url
+    except Exception as e:
+        logging.error(f"Failed to get current URL: {e}")
+        return ""
+
+
+async def navigate_to(page, url: str):
+    """Navigate to a URL."""
+    try:
+        await page.go_to(url)
+        return True
+    except Exception as e:
+        logging.error(f"Failed to navigate to {url}: {e}")
+        return False
+
+
+async def refresh_page(page):
+    """Refresh the current page."""
+    try:
+        await page.refresh()
+        return True
+    except Exception as e:
+        logging.error(f"Failed to refresh page: {e}")
+        return False
+
+
+async def wait_for_element_visible(page, by: By, value: str, timeout: int = 10):
+    """Wait for an element to be visible."""
+    try:
+        element = await page.find_or_wait_element(by, value, timeout=timeout)
+        await element.wait_until(is_visible=True, timeout=timeout)
+        return element
+    except Exception as e:
+        logging.error(f"Element not visible: {e}")
+        return None
+
+
+async def wait_for_element_clickable(page, by: By, value: str, timeout: int = 10):
+    """Wait for an element to be clickable."""
+    try:
+        element = await page.find_or_wait_element(by, value, timeout=timeout)
+        await element.wait_until(is_interactable=True, timeout=timeout)
+        return element
+    except Exception as e:
+        logging.error(f"Element not clickable: {e}")
+        return None
 
 
 def check_official_version(version: str) -> bool:
