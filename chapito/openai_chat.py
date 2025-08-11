@@ -1,8 +1,5 @@
 import time
 import logging
-from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
-from selenium.webdriver.common.by import By
 from bs4 import BeautifulSoup, Tag
 
 from chapito.config import Config
@@ -20,7 +17,7 @@ PREFERED_RESPONSE_BUTTON_CSS_SELECTOR: str = 'button[data-testid="paragen-prefer
 def check_if_chat_loaded(driver) -> bool:
     driver.implicitly_wait(5)
     try:
-        button = driver.find_element(By.CSS_SELECTOR, VOICE_CSS_SELECTOR)
+        button = driver.find_element_by_css_selector(VOICE_CSS_SELECTOR)
     except Exception as e:
         logging.warning("Can't find submit button in chat interface. Maybe it's not loaded yet.")
         return False
@@ -28,7 +25,7 @@ def check_if_chat_loaded(driver) -> bool:
 
 
 def initialize_driver(config: Config):
-    logging.info("Initializing browser for Perplexity...")
+    logging.info("Initializing browser for OpenAI...")
     driver = create_driver(config)
     driver.get(URL)
 
@@ -42,11 +39,11 @@ def initialize_driver(config: Config):
 def send_request_and_get_response(driver, message):
     logging.debug("Send request to chatbot interface")
     driver.implicitly_wait(10)
-    textarea = driver.find_element(By.CSS_SELECTOR, TEXTAREA_CSS_SELECTOR)
+    textarea = driver.find_element_by_css_selector(TEXTAREA_CSS_SELECTOR)
     transfer_prompt(message, textarea)
-    wait = WebDriverWait(driver, TIMEOUT_SECONDS)
-    wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, SUBMIT_CSS_SELECTOR)))
-    submit_button = driver.find_element(By.CSS_SELECTOR, SUBMIT_CSS_SELECTOR)
+    
+    # Wait for submit button to be available
+    submit_button = driver.wait_for_element_by_css_selector(SUBMIT_CSS_SELECTOR, timeout=TIMEOUT_SECONDS)
     logging.debug("Push submit button")
     submit_button.click()
 
@@ -54,19 +51,18 @@ def send_request_and_get_response(driver, message):
     time.sleep(1)
 
     # Wait for submit button to be available. It means answer is finished.
-    wait = WebDriverWait(driver, TIMEOUT_SECONDS)
-    wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, VOICE_CSS_SELECTOR)))
+    driver.wait_for_element_by_css_selector(VOICE_CSS_SELECTOR, timeout=TIMEOUT_SECONDS)
 
     time.sleep(1)  # OpenAI displays the button before the end of the answer.
 
     # Test if 2 solutions are available.
     driver.implicitly_wait(1)
-    prefered_answer_buttons = driver.find_elements(By.CSS_SELECTOR, PREFERED_RESPONSE_BUTTON_CSS_SELECTOR)
+    prefered_answer_buttons = driver.find_elements_by_css_selector(PREFERED_RESPONSE_BUTTON_CSS_SELECTOR)
     if len(prefered_answer_buttons) > 0:
         prefered_answer_buttons[0].click()
         time.sleep(1)
     driver.implicitly_wait(10)
-    message_bubbles = driver.find_elements(By.XPATH, ANSWER_XPATH)
+    message_bubbles = driver.find_elements_by_xpath(ANSWER_XPATH)
     if not message_bubbles:
         logging.warning("No message found.")
         return ""

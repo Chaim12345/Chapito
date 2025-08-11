@@ -7,8 +7,8 @@ import pyperclip
 import logging
 import requests
 import re
-# Import pydoll instead of selenium
-import pydoll
+# Import pydoll-python instead of selenium
+import pydoll_python as pydoll
 
 
 def get_os() -> OsType:
