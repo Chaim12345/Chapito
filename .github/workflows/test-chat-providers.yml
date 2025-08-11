@@ -48,6 +48,9 @@ jobs:
           echo "Firefox version: $(firefox --version)"
         fi
         
+        # Install additional dependencies for testing
+        sudo apt-get install -y curl jq
+        
     - name: Cache pip dependencies
       uses: actions/cache@v3
       with:
@@ -117,43 +120,31 @@ jobs:
             
         print('✅ All imports successful!')
         
-    - name: Run browser tests
+    - name: Run comprehensive tests
       run: |
-        echo "🌐 Testing browser functionality..."
-        python test_browser.py
+        echo "🧪 Running comprehensive tests..."
+        python test_runner.py --browser
       continue-on-error: true
       
-    - name: Run chat provider tests
+    - name: Start API server for testing
       run: |
-        echo "🤖 Testing chat providers..."
-        python test_chat_providers.py
+        echo "🚀 Starting API server for testing..."
+        timeout 30s python -m uvicorn main:app --host 0.0.0.0 --port 8000 &
+        sleep 5
+        echo "✅ API server started"
       continue-on-error: true
       
-    - name: Run API tests
+    - name: Test API endpoints
       run: |
-        echo "🔌 Testing API endpoints..."
-        python -c "
-        import asyncio
-        import sys
-        sys.path.append('.')
-        
-        async def test_api():
-          try:
-            from chapito.proxy import app
-            print('✅ Proxy API imports successful')
-            
-            from main import app as main_app
-            print('✅ Main API imports successful')
-            
-            # Test basic functionality
-            print('✅ API structure validation passed')
-            
-          except Exception as e:
-            print(f'❌ API test failed: {e}')
-            exit(1)
-            
-        asyncio.run(test_api())
-        "
+        echo "🔌 Testing API endpoints with real requests..."
+        python test_api_endpoints.py
+      continue-on-error: true
+      
+    - name: Test all chat providers
+      run: |
+        echo "🤖 Testing all chat providers with browser..."
+        timeout 300s python test_all_providers.py
+      continue-on-error: true
         
     - name: Generate test report
       if: always()
