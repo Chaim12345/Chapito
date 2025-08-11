@@ -2,7 +2,7 @@ import asyncio
 import logging
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 
 from chapito.config import Config
 from chapito.tools.tools import create_driver, close_browser
@@ -22,7 +22,13 @@ from chapito.qwen_chat import chat_with_qwen
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="Chapito API", description="Free API access using web-based chatbots")
+app = FastAPI(
+    title="Chapito API", 
+    description="Free API access using web-based chatbots",
+    version="1.0.0",
+    docs_url="/docs",
+    redoc_url="/redoc"
+)
 
 # Global browser instance
 browser = None
@@ -30,15 +36,33 @@ page = None
 
 
 class ChatRequest(BaseModel):
+    """Chat request model."""
     message: str
     model: str
 
 
 class ChatResponse(BaseModel):
+    """Chat response model."""
     response: str
     model: str
     success: bool
     error: Optional[str] = None
+
+
+class HealthResponse(BaseModel):
+    """Health check response model."""
+    status: str
+    browser: str
+
+
+class ModelsResponse(BaseModel):
+    """Models list response model."""
+    supported_models: List[str]
+
+
+class RestartResponse(BaseModel):
+    """Restart response model."""
+    message: str
 
 
 async def initialize_browser():
@@ -80,7 +104,7 @@ async def shutdown_event():
     await cleanup_browser()
 
 
-@app.post("/chat", response_model=ChatResponse)
+@app.post("/chat", response_model=ChatResponse, tags=["Chat"])
 async def chat_endpoint(request: ChatRequest):
     """Main chat endpoint that routes to different AI models."""
     try:
@@ -136,7 +160,7 @@ async def chat_endpoint(request: ChatRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/health")
+@app.get("/health", response_model=HealthResponse, tags=["Health"])
 async def health_check():
     """Health check endpoint."""
     try:
@@ -148,7 +172,7 @@ async def health_check():
         return {"status": "error", "error": str(e)}
 
 
-@app.get("/models")
+@app.get("/models", response_model=ModelsResponse, tags=["Models"])
 async def get_models():
     """Get available AI models."""
     return {
@@ -168,7 +192,7 @@ async def get_models():
     }
 
 
-@app.post("/restart")
+@app.post("/restart", response_model=RestartResponse, tags=["System"])
 async def restart_browser():
     """Restart the browser instance."""
     try:
@@ -182,6 +206,31 @@ async def restart_browser():
     except Exception as e:
         logger.error(f"Error restarting browser: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/", tags=["Root"])
+async def root():
+    """Root endpoint providing API information."""
+    return {
+        "name": "Chapito API",
+        "version": "1.0.0",
+        "description": "Free API access using web-based chatbots",
+        "endpoints": {
+            "chat": "/chat",
+            "models": "/models",
+            "health": "/health",
+            "restart": "/restart",
+            "docs": "/docs",
+            "redoc": "/redoc",
+            "openapi": "/openapi.json"
+        }
+    }
+
+
+@app.get("/openapi.json", tags=["API"])
+async def get_openapi_json():
+    """Get the OpenAPI specification in JSON format."""
+    return app.openapi()
 
 
 if __name__ == "__main__":
