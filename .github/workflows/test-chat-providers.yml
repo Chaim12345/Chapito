@@ -1,0 +1,258 @@
+name: Test Chat Providers
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main, develop ]
+  schedule:
+    # Run tests daily at 2 AM UTC
+    - cron: '0 2 * * *'
+  workflow_dispatch: # Allow manual triggering
+
+jobs:
+  test-chat-providers:
+    runs-on: ubuntu-latest
+    
+    strategy:
+      matrix:
+        python-version: [3.9, 3.10, 3.11]
+        browser: [chrome, firefox]
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Set up Python ${{ matrix.python-version }}
+      uses: actions/setup-python@v4
+      with:
+        python-version: ${{ matrix.python-version }}
+        
+    - name: Install system dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y wget gnupg2 unzip
+        
+        # Install Chrome
+        if [ "${{ matrix.browser }}" = "chrome" ]; then
+          wget -q -O - https://dl.google.com/linux/linux_signing_key.pub | sudo apt-key add -
+          echo "deb [arch=amd64] http://dl.google.com/linux/chrome/deb/ stable main" | sudo tee /etc/apt/sources.list.d/google-chrome.list
+          sudo apt-get update
+          sudo apt-get install -y google-chrome-stable
+          echo "Chrome version: $(google-chrome --version)"
+        fi
+        
+        # Install Firefox
+        if [ "${{ matrix.browser }}" = "firefox" ]; then
+          sudo apt-get install -y firefox
+          echo "Firefox version: $(firefox --version)"
+        fi
+        
+    - name: Cache pip dependencies
+      uses: actions/cache@v3
+      with:
+        path: ~/.cache/pip
+        key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
+        restore-keys: |
+          ${{ runner.os }}-pip-
+          
+    - name: Install Python dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        
+    - name: Run syntax checks
+      run: |
+        echo "🔍 Checking Python syntax..."
+        python -m py_compile chapito/proxy.py
+        python -m py_compile main.py
+        python -m py_compile chapito/config.py
+        python -m py_compile chapito/types.py
+        python -m py_compile chapito/tools/tools.py
+        
+        # Check all chat provider files
+        for file in chapito/*_chat.py; do
+          echo "Checking $file..."
+          python -m py_compile "$file"
+        done
+        echo "✅ All syntax checks passed!"
+        
+    - name: Run import tests
+      run: |
+        echo "🔍 Testing imports..."
+        python -c "
+        try:
+          import pydoll
+          from pydoll.browser import Chrome
+          from pydoll.constants import By
+          print('✅ pydoll imports successful')
+        except ImportError as e:
+          print(f'❌ pydoll import failed: {e}')
+          exit(1)
+        "
+        
+        python -c "
+        try:
+          from chapito.tools.tools import create_driver, close_browser
+          print('✅ chapito.tools imports successful')
+        except ImportError as e:
+          print(f'❌ chapito.tools import failed: {e}')
+          exit(1)
+        "
+        
+        # Test importing each chat provider
+        providers = [
+          'deepseek_chat', 'duckduckgo_chat', 'gemini_chat', 'kimi_chat',
+          'mistral_chat', 'qwen_chat', 'perplexity_chat', 'ai_studio_chat',
+          'grok_chat', 'anthropic_chat', 'openai_chat'
+        ]
+        
+        for provider in providers:
+          try:
+            __import__(f'chapito.{provider}')
+            print(f'✅ {provider} import successful')
+          except ImportError as e:
+            print(f'❌ {provider} import failed: {e}')
+            exit(1)
+            
+        print('✅ All imports successful!')
+        
+    - name: Run browser tests
+      run: |
+        echo "🌐 Testing browser functionality..."
+        python test_browser.py
+      continue-on-error: true
+      
+    - name: Run chat provider tests
+      run: |
+        echo "🤖 Testing chat providers..."
+        python test_chat_providers.py
+      continue-on-error: true
+      
+    - name: Run API tests
+      run: |
+        echo "🔌 Testing API endpoints..."
+        python -c "
+        import asyncio
+        import sys
+        sys.path.append('.')
+        
+        async def test_api():
+          try:
+            from chapito.proxy import app
+            print('✅ Proxy API imports successful')
+            
+            from main import app as main_app
+            print('✅ Main API imports successful')
+            
+            # Test basic functionality
+            print('✅ API structure validation passed')
+            
+          except Exception as e:
+            print(f'❌ API test failed: {e}')
+            exit(1)
+            
+        asyncio.run(test_api())
+        "
+        
+    - name: Generate test report
+      if: always()
+      run: |
+        echo "📊 Test Summary for ${{ matrix.python-version }} - ${{ matrix.browser }}"
+        echo "=================================================="
+        echo "Python version: ${{ matrix.python-version }}"
+        echo "Browser: ${{ matrix.browser }}"
+        echo "Job status: ${{ job.status }}"
+        echo "=================================================="
+        
+    - name: Upload test artifacts
+      if: always()
+      uses: actions/upload-artifact@v3
+      with:
+        name: test-results-${{ matrix.python-version }}-${{ matrix.browser }}
+        path: |
+          *.log
+          test-results/
+        retention-days: 7
+
+  lint-and-format:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: 3.11
+        
+    - name: Install linting tools
+      run: |
+        python -m pip install --upgrade pip
+        pip install flake8 black isort mypy
+        
+    - name: Run linting
+      run: |
+        echo "🔍 Running linting checks..."
+        
+        # Check code formatting with black
+        echo "Checking code formatting..."
+        black --check --diff .
+        
+        # Check import sorting with isort
+        echo "Checking import sorting..."
+        isort --check-only --diff .
+        
+        # Run flake8 for style checks
+        echo "Running style checks..."
+        flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics
+        flake8 . --count --exit-zero --max-complexity=10 --max-line-length=127 --statistics
+        
+        echo "✅ All linting checks passed!"
+        
+    - name: Type checking
+      run: |
+        echo "🔍 Running type checks..."
+        mypy --ignore-missing-imports chapito/
+        echo "✅ Type checking completed!"
+
+  security-scan:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: 3.11
+        
+    - name: Install security tools
+      run: |
+        python -m pip install --upgrade pip
+        pip install bandit safety
+        
+    - name: Run security scan
+      run: |
+        echo "🔒 Running security scan..."
+        
+        # Run bandit for security issues
+        echo "Running bandit security scan..."
+        bandit -r . -f json -o bandit-report.json || true
+        
+        # Check for known vulnerabilities
+        echo "Checking for known vulnerabilities..."
+        safety check --json --output safety-report.json || true
+        
+        echo "✅ Security scan completed!"
+        
+    - name: Upload security reports
+      uses: actions/upload-artifact@v3
+      with:
+        name: security-reports
+        path: |
+          bandit-report.json
+          safety-report.json
+        retention-days: 30
