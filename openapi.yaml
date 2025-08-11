@@ -12,11 +12,86 @@ servers:
     description: Production server
 
 paths:
+  /:
+    get:
+      summary: Root endpoint
+      description: Get API information and available endpoints
+      operationId: getRoot
+      tags:
+        - Root
+      responses:
+        '200':
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  name:
+                    type: string
+                  version:
+                    type: string
+                  description:
+                    type: string
+                  endpoints:
+                    type: object
+                  compatibility:
+                    type: string
+
+  /v1:
+    get:
+      summary: V1 endpoint
+      description: Get API information for v1 endpoints
+      operationId: getV1Root
+      tags:
+        - Root
+      responses:
+        '200':
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  name:
+                    type: string
+                  version:
+                    type: string
+                  description:
+                    type: string
+                  endpoints:
+                    type: object
+                  compatibility:
+                    type: string
+
   /models:
     get:
       summary: List available models
       description: Returns a list of available models
       operationId: listModels
+      tags:
+        - Models
+      responses:
+        '200':
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ModelsResponse'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /v1/models:
+    get:
+      summary: List available models (v1)
+      description: Returns a list of available models using v1 endpoint
+      operationId: listModelsV1
+      tags:
+        - Models
       responses:
         '200':
           description: Successful response
@@ -36,6 +111,50 @@ paths:
       summary: Create a chat completion
       description: Creates a completion for the chat message
       operationId: createChatCompletion
+      tags:
+        - Chat
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ChatCompletionRequest'
+      responses:
+        '200':
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ChatCompletionResponse'
+            text/event-stream:
+              schema:
+                $ref: '#/components/schemas/ChatCompletionStreamResponse'
+        '400':
+          description: Bad request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '422':
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /v1/chat/completions:
+    post:
+      summary: Create a chat completion (v1)
+      description: Creates a completion for the chat message using v1 endpoint
+      operationId: createChatCompletionV1
+      tags:
+        - Chat
       requestBody:
         required: true
         content:
@@ -76,6 +195,8 @@ paths:
       summary: Health check
       description: Check the health status of the service
       operationId: healthCheck
+      tags:
+        - Health
       responses:
         '200':
           description: Service is healthy
@@ -90,6 +211,65 @@ paths:
                   service:
                     type: string
                     example: "chapito-proxy"
+
+  /v1/health:
+    get:
+      summary: Health check (v1)
+      description: Check the health status of the service using v1 endpoint
+      operationId: healthCheckV1
+      tags:
+        - Health
+      responses:
+        '200':
+          description: Service is healthy
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: "healthy"
+                  service:
+                    type: string
+                    example: "chapito-proxy"
+
+  /openapi.json:
+    get:
+      summary: OpenAPI specification
+      description: Get the OpenAPI specification in JSON format
+      operationId: getOpenAPI
+      tags:
+        - API
+      responses:
+        '200':
+          description: OpenAPI specification
+          content:
+            application/json:
+              schema:
+                type: object
+
+  /docs:
+    get:
+      summary: API documentation
+      description: Swagger UI documentation
+      operationId: getDocs
+      tags:
+        - API
+      responses:
+        '200':
+          description: HTML documentation
+
+  /redoc:
+    get:
+      summary: API documentation (ReDoc)
+      description: ReDoc documentation
+      operationId: getRedoc
+      tags:
+        - API
+      responses:
+        '200':
+          description: HTML documentation
 
 components:
   schemas:
@@ -215,6 +395,14 @@ components:
         usage:
           $ref: '#/components/schemas/Usage'
 
+    ChatCompletionStreamResponse:
+      type: object
+      description: Streaming response format
+      properties:
+        data:
+          type: string
+          description: Server-sent events data
+
     ChatCompletionChoice:
       type: object
       required:
@@ -338,9 +526,13 @@ components:
               example: "not_found"
 
 tags:
+  - name: Root
+    description: Root endpoints providing API information
   - name: Models
     description: Operations related to models
   - name: Chat
     description: Operations related to chat completions
   - name: Health
     description: Health check operations
+  - name: API
+    description: API documentation and specification
