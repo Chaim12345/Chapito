@@ -2,7 +2,7 @@ name: Test Chat Providers
 
 on:
   push:
-    branches: [ main, develop ]
+    branches: [ main, develop, cursor/port-selnum-project-to-pydoll-2831 ]
   pull_request:
     branches: [ main, develop ]
   schedule:
