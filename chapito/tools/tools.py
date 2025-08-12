@@ -29,6 +29,26 @@ async def create_driver() -> Chrome:
     return browser
 
 
+async def get_new_page(browser: Chrome):
+    """Return a new or existing page/tab for the given browser.
+
+    Tries multiple method names to maintain compatibility across pydoll versions.
+    """
+    # Prefer explicit new tab/page creation methods if available
+    if hasattr(browser, "new_tab") and callable(getattr(browser, "new_tab")):
+        return await browser.new_tab()
+    if hasattr(browser, "new_page") and callable(getattr(browser, "new_page")):
+        return await browser.new_page()
+    # Older API fallback
+    if hasattr(browser, "get_page") and callable(getattr(browser, "get_page")):
+        return await browser.get_page()
+    # Property or callable attribute fallback
+    if hasattr(browser, "page"):
+        page_attr = getattr(browser, "page")
+        return await page_attr() if callable(page_attr) else page_attr
+    raise AttributeError("Browser has no method to create or get a page/tab")
+
+
 async def paste(textarea):
     logging.debug("Paste prompt")
     await textarea.click()
@@ -183,10 +203,25 @@ async def get_current_url(page):
 
 
 async def navigate_to(page, url: str):
-    """Navigate to a URL."""
+    """Navigate to a URL. Tries multiple method names for compatibility."""
     try:
-        await page.go_to(url)
-        return True
+        if hasattr(page, "go_to") and callable(getattr(page, "go_to")):
+            await page.go_to(url)
+            return True
+        if hasattr(page, "goto") and callable(getattr(page, "goto")):
+            await page.goto(url)
+            return True
+        if hasattr(page, "navigate_to") and callable(getattr(page, "navigate_to")):
+            await page.navigate_to(url)
+            return True
+        if hasattr(page, "navigate") and callable(getattr(page, "navigate")):
+            await page.navigate(url)
+            return True
+        # Last resort: try execute_script to change location
+        if hasattr(page, "execute_script"):
+            await page.execute_script(f"window.location.href='{url}'")
+            return True
+        raise AttributeError("No known navigation method found on page object")
     except Exception as e:
         logging.error(f"Failed to navigate to {url}: {e}")
         return False

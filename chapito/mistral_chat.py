@@ -5,7 +5,7 @@ import asyncio
 from bs4 import BeautifulSoup, Tag
 
 from chapito.config import Config
-from chapito.tools.tools import create_driver, transfer_prompt, wait_for_element, find_element, click_element, wait_for_element_visible, wait_for_element_clickable, navigate_to, get_page_source, close_browser, execute_script
+from chapito.tools.tools import create_driver, transfer_prompt, wait_for_element, find_element, click_element, wait_for_element_visible, wait_for_element_clickable, navigate_to, get_page_source, close_browser, execute_script, get_new_page
 from pydoll.constants import By
 
 MISTRAL_URL: str = "https://chat.mistral.ai/"
@@ -160,7 +160,7 @@ async def main():
     try:
         # Create browser
         browser = await create_driver()
-        page = await browser.get_page()
+        page = await get_new_page(browser)
         
         # Navigate to Mistral
         if not await navigate_to(page, MISTRAL_URL):

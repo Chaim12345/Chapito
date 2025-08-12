@@ -3,9 +3,10 @@ import logging
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from typing import Optional, Dict, Any, List
+from contextlib import asynccontextmanager
 
 from chapito.config import Config
-from chapito.tools.tools import create_driver, close_browser
+from chapito.tools.tools import create_driver, close_browser, get_new_page
 from chapito.openai_chat import chat_with_gpt
 from chapito.anthropic_chat import chat_with_claude
 from chapito.grok_chat import chat_with_grok
@@ -71,7 +72,10 @@ async def initialize_browser():
     try:
         if browser is None:
             browser = await create_driver()
-            page = await browser.get_page()
+        if page is None:
+            page_local = await get_new_page(browser)
+            # Assign after success to avoid half-initialized state
+            page = page_local
             logger.info("Browser initialized successfully")
         return True
     except Exception as e:
@@ -92,16 +96,17 @@ async def cleanup_browser():
         logger.error(f"Error cleaning up browser: {e}")
 
 
-@app.on_event("startup")
-async def startup_event():
-    """Initialize browser on startup."""
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Startup
     await initialize_browser()
+    try:
+        yield
+    finally:
+        # Shutdown
+        await cleanup_browser()
 
-
-@app.on_event("shutdown")
-async def shutdown_event():
-    """Clean up browser on shutdown."""
-    await cleanup_browser()
+app.router.lifespan_context = lifespan
 
 
 @app.post("/chat", response_model=ChatResponse, tags=["Chat"])
