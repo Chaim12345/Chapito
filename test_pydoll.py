@@ -8,6 +8,7 @@ import asyncio
 import logging
 from pydoll.browser import Chrome
 from pydoll.constants import By
+from chapito.tools.tools import get_new_page
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -26,7 +27,7 @@ async def test_basic_browser_functionality():
         logger.info("Browser started successfully")
         
         # Get page
-        page = await browser.get_page()
+        page = await get_new_page(browser)
         logger.info("Page created successfully")
         
         # Navigate to a simple page
@@ -79,7 +80,7 @@ async def test_element_interaction():
         # Create browser
         browser = Chrome()
         await browser.start()
-        page = await browser.get_page()
+        page = await get_new_page(browser)
         
         # Navigate to a form page
         await page.go_to("https://httpbin.org/forms/post")

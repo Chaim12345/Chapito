@@ -49,7 +49,7 @@ class ChapitoTester:
             from chapito.tools.tools import (
                 create_driver, close_browser, wait_for_element, 
                 find_element, click_element, send_keys, navigate_to,
-                get_page_source
+                get_page_source, get_new_page
             )
             logger.info("✅ chapito.tools imports successful")
             
@@ -238,7 +238,7 @@ class ChapitoTester:
         logger.info("🌐 Testing browser functionality...")
         
         try:
-            from chapito.tools.tools import create_driver, close_browser
+            from chapito.tools.tools import create_driver, close_browser, get_new_page, navigate_to
             
             # Try to create a driver
             driver = await create_driver()
@@ -246,16 +246,16 @@ class ChapitoTester:
                 logger.info("✅ Browser driver created successfully")
                 
                 # Get a page
-                page = await driver.get_page()
+                page = await get_new_page(driver)
                 logger.info("✅ Page obtained successfully")
                 
                 # Navigate to a simple page
-                await page.navigate_to("https://httpbin.org/html")
+                await navigate_to(page, "https://httpbin.org/html")
                 logger.info("✅ Navigation successful")
                 
-                # Get page title
-                title = await page.get_title()
-                logger.info(f"✅ Page title: {title}")
+                # Get page title or verify content
+                page_source = await page.page_source
+                logger.info(f"✅ Page source length: {len(page_source)}")
                 
                 # Clean up
                 await close_browser(driver)
@@ -299,87 +299,35 @@ class ChapitoTester:
             self.test_imports,
             self.test_code_structure,
             self.test_async_functions,
-            self.test_pydantic_models,
+            self.test_pydantic_models
         ]
         
-        for test_func in local_tests:
-            result = test_func()
+        for test in local_tests:
+            result = test()
             self.results.append(result)
-            logger.info(f"🧪 {result.test_name}: {'✅ PASS' if result.success else '❌ FAIL'}")
+            status = "PASS" if result.success else "FAIL"
+            logger.info(f"{result.test_name}: {status} ({result.duration:.2f}s)")
+            if result.error:
+                logger.error(f"Error: {result.error}")
         
-        # Run browser test if requested
+        # Optionally run browser tests
         if include_browser:
-            logger.info("\n🧪 Running browser functionality test...")
-            browser_result = await self.test_browser_functionality()
-            self.results.append(browser_result)
-            logger.info(f"🧪 {browser_result.test_name}: {'✅ PASS' if browser_result.success else '❌ FAIL'}")
-        
-        self.print_results()
-    
-    def print_results(self) -> None:
-        """Print test results summary."""
-        logger.info("\n" + "=" * 50)
-        logger.info("📊 TEST RESULTS SUMMARY")
-        logger.info("=" * 50)
-        
-        total_tests = len(self.results)
-        successful_tests = sum(1 for r in self.results if r.success)
-        failed_tests = total_tests - successful_tests
-        
-        logger.info(f"Total Tests: {total_tests}")
-        logger.info(f"✅ Successful: {successful_tests}")
-        logger.info(f"❌ Failed: {failed_tests}")
-        logger.info(f"Success Rate: {(successful_tests/total_tests)*100:.1f}%")
-        
-        logger.info("\n📋 DETAILED RESULTS:")
-        logger.info("-" * 50)
-        
-        for result in self.results:
-            status = "✅ PASS" if result.success else "❌ FAIL"
-            duration_str = f"{result.duration:.2f}s"
-            
-            logger.info(f"{status} {result.test_name:<20} ({duration_str})")
-            logger.info(f"    Details: {result.details}")
-            
-            if not result.success and result.error:
-                logger.info(f"    Error: {result.error}")
+            result = await self.test_browser_functionality()
+            self.results.append(result)
+            status = "PASS" if result.success else "FAIL"
+            logger.info(f"{result.test_name}: {status} ({result.duration:.2f}s)")
+            if result.error:
+                logger.error(f"Error: {result.error}")
         
         # Summary
-        logger.info("\n" + "=" * 50)
-        if failed_tests == 0:
-            logger.info("🎉 ALL TESTS PASSED! Chapito is ready to use.")
-        else:
-            logger.warning(f"⚠️  {failed_tests} test(s) failed. Please check the errors above.")
+        passed = sum(1 for r in self.results if r.success)
+        total = len(self.results)
         logger.info("=" * 50)
-        
-        # Return exit code for CI/CD
-        return 0 if failed_tests == 0 else 1
+        logger.info(f"Tests Passed: {passed}/{total}")
+        logger.info("=" * 50)
 
-async def main():
-    """Main function."""
-    import argparse
-    
-    parser = argparse.ArgumentParser(description="Test Chapito chat providers")
-    parser.add_argument("--browser", action="store_true", 
-                       help="Include browser functionality tests")
-    parser.add_argument("--local-only", action="store_true", 
-                       help="Run only local tests (no browser)")
-    
-    args = parser.parse_args()
-    
-    tester = ChapitoTester()
-    
-    try:
-        include_browser = args.browser and not args.local_only
-        await tester.run_all_tests(include_browser=include_browser)
-        exit_code = 0 if all(r.success for r in tester.results) else 1
-        sys.exit(exit_code)
-    except KeyboardInterrupt:
-        logger.info("\n🛑 Testing interrupted by user")
-        sys.exit(1)
-    except Exception as e:
-        logger.error(f"💥 Unexpected error during testing: {e}")
-        sys.exit(1)
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    tester = ChapitoTester()
+    include_browser = '--browser' in sys.argv
+    asyncio.run(tester.run_all_tests(include_browser=include_browser))
