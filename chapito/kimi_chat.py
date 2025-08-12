@@ -1,12 +1,11 @@
 import time
 import logging
-from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
-from selenium.webdriver.common.by import By
+import asyncio
 from bs4 import BeautifulSoup, Tag
 
 from chapito.config import Config
-from chapito.tools.tools import create_driver, transfer_prompt
+from chapito.tools.tools import create_driver, transfer_prompt, wait_for_element, find_element, click_element, wait_for_element_visible, wait_for_element_clickable, navigate_to, get_page_source, close_browser
+from pydoll.constants import By
 
 URL: str = "https://www.kimi.com/chat/"
 TIMEOUT_SECONDS: int = 120
@@ -16,63 +15,96 @@ SUBMIT_DISABLE_CSS_SELECTOR: str = "div.send-button-container.disabled:not(.stop
 ANSWER_XPATH: str = "//div[@class='markdown-container']"
 
 
-def check_if_chat_loaded(driver) -> bool:
-    driver.implicitly_wait(5)
+async def check_if_chat_loaded(page) -> bool:
     try:
-        element = driver.find_element(By.XPATH, QUESTION_XPATH)
+        element = await wait_for_element(page, By.XPATH, QUESTION_XPATH, timeout=5)
+        return element is not None
     except Exception as e:
-        logging.warning("Can't find specific element in chat interface. Maybe it's not loaded yet.")
+        logging.error(f"Error checking if chat loaded: {e}")
         return False
-    return element is not None
 
 
-def initialize_driver(config: Config):
-    logging.info("Initializing browser for Kimi...")
-    driver = create_driver(config)
-    driver.get(URL)
+async def wait_for_chat_to_load(page) -> bool:
+    """Wait for the chat interface to fully load."""
+    start_time = time.time()
+    while time.time() - start_time < TIMEOUT_SECONDS:
+        if await check_if_chat_loaded(page):
+            logging.info("Chat interface loaded successfully")
+            return True
+        await asyncio.sleep(1)
+    
+    logging.error("Chat interface failed to load within timeout")
+    return False
 
-    while not check_if_chat_loaded(driver):
-        logging.info("Waiting for chat interface to load...")
-        time.sleep(5)
-    logging.info("Browser initialized")
-    return driver
+
+async def send_message(page, message: str) -> bool:
+    """Send a message to the chat interface."""
+    try:
+        # Find and click the textarea
+        textarea = await page.find(by=By.XPATH, value=QUESTION_XPATH)
+        if not textarea:
+            logging.error("No textarea found")
+            return False
+        
+        await textarea.click()
+        await textarea.insert_text(message)
+        
+        # Find and click the submit button
+        submit_buttons = await page.find(by=By.CSS_SELECTOR, value=SUBMIT_CSS_SELECTOR, find_all=True)
+        if not submit_buttons:
+            logging.error("Submit button not found")
+            return False
+        
+        submit_button = submit_buttons[-1]  # Use the last submit button
+        await click_element(submit_button)
+        logging.info("Message sent successfully")
+        return True
+        
+    except Exception as e:
+        logging.error(f"Error sending message: {e}")
+        return False
 
 
-def send_request_and_get_response(driver, message):
-    logging.debug("Send request to chatbot interface")
-    driver.implicitly_wait(10)
-    textarea = driver.find_element(By.XPATH, QUESTION_XPATH)
-    transfer_prompt(message, textarea)
-    wait = WebDriverWait(driver, TIMEOUT_SECONDS)
-    wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, SUBMIT_CSS_SELECTOR)))
-    time.sleep(1)
-    submit_buttons = driver.find_elements(By.CSS_SELECTOR, SUBMIT_CSS_SELECTOR)
-    submit_button = submit_buttons[-1]
-    logging.debug("Push submit button")
-    submit_button.click()
+async def wait_for_response(page) -> bool:
+    """Wait for the AI response to appear."""
+    try:
+        start_time = time.time()
+        while time.time() - start_time < TIMEOUT_SECONDS:
+            # Check if response has appeared
+            response_elements = await page.find(by=By.XPATH, value=ANSWER_XPATH, find_all=True)
+            if response_elements:
+                logging.info("Response received")
+                return True
+            
+            await asyncio.sleep(1)
+        
+        logging.error("Response timeout")
+        return False
+        
+    except Exception as e:
+        logging.error(f"Error waiting for response: {e}")
+        return False
 
-    # Wait a little time to avoid early fail.
-    time.sleep(3)
 
-    # Wait for submit button to be available. It means answer is finished.
-    wait = WebDriverWait(driver, TIMEOUT_SECONDS)
-    wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, SUBMIT_DISABLE_CSS_SELECTOR)))
-
-    time.sleep(1)
-    message_bubbles = driver.find_elements(By.XPATH, ANSWER_XPATH)
-    if not message_bubbles:
-        logging.warning("No message found.")
+async def get_last_response(page) -> str:
+    """Get the last AI response text."""
+    try:
+        response_elements = await page.find(by=By.XPATH, value=ANSWER_XPATH, find_all=True)
+        if response_elements:
+            last_response = response_elements[-1]
+            html = await last_response.get_attribute("outerHTML")
+            clean_message = clean_chat_answer(html)
+            return clean_message
         return ""
-    last_message_bubble = message_bubbles[-1]
-    html = last_message_bubble.get_attribute("outerHTML")
-    clean_message = clean_chat_answer(html)
-    logging.debug(f"Clean message ends with: {clean_message[-100:]}")
-    return clean_message
+        
+    except Exception as e:
+        logging.error(f"Error getting last response: {e}")
+        return ""
 
 
 def clean_chat_answer(html: str) -> str:
     """
-    Find all DIVs containing code and remove unecessary decorations."
+    Find all DIVs containing code and remove unnecessary decorations.
     """
     logging.debug("Clean chat answer")
     soup = BeautifulSoup(html, "html.parser")
@@ -92,18 +124,56 @@ def clean_chat_answer(html: str) -> str:
     return clean_answer
 
 
-def main():
-    driver = initialize_driver(Config())
+async def chat_with_kimi(page, message: str) -> str:
+    """Main function to chat with Kimi."""
     try:
-        while True:
-            user_request = input("Ask something (or 'quit'): ")
-            if user_request.lower() == "quit":
-                break
-            response = send_request_and_get_response(driver, user_request)
-            print("Answer:", response)
+        # Send the message
+        if not await send_message(page, message):
+            return "Error: Failed to send message"
+        
+        # Wait for response
+        if not await wait_for_response(page):
+            return "Error: Response timeout"
+        
+        # Get the response
+        response = await get_last_response(page)
+        
+        return response
+        
+    except Exception as e:
+        logging.error(f"Error in chat_with_kimi: {e}")
+        return f"Error: {str(e)}"
+
+
+async def main():
+    """Main function to demonstrate the chat functionality."""
+    browser = None
+    try:
+        # Create browser
+        browser = await create_driver()
+        page = await browser.get_page()
+        
+        # Navigate to Kimi
+        if not await navigate_to(page, URL):
+            logging.error("Failed to navigate to Kimi")
+            return
+        
+        # Wait for chat to load
+        if not await wait_for_chat_to_load(page):
+            logging.error("Chat failed to load")
+            return
+        
+        # Example chat
+        message = "Hello! How are you today?"
+        response = await chat_with_kimi(page, message)
+        print(f"Kimi Response: {response}")
+        
+    except Exception as e:
+        logging.error(f"Error in main: {e}")
     finally:
-        driver.quit()
+        if browser:
+            await close_browser(browser)
 
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())

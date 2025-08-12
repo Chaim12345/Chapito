@@ -1,115 +1,177 @@
 import time
 import logging
-from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
-from selenium.webdriver.common.by import By
+import asyncio
 from bs4 import BeautifulSoup, Tag
 
 from chapito.config import Config
-from chapito.tools.tools import create_driver, transfer_prompt
+from chapito.tools.tools import create_driver, transfer_prompt, wait_for_element, find_element, click_element, wait_for_element_visible, wait_for_element_clickable, navigate_to, get_page_source, close_browser
+from pydoll.constants import By
 
-URL: str = "https://claude.ai/new"
+URL: str = "https://claude.ai/"
 TIMEOUT_SECONDS: int = 120
-SUBMIT_CSS_SELECTOR: str = 'button[type="button"][aria-label="Send Message"]'
-SUBMIT_DISABLE_CSS_SELECTOR: str = 'button[disabled][type="button"][aria-label="Send Message"]'
-ANSWER_XPATH: str = '//div[contains(@class, "font-claude-message")]'
+SUBMIT_CSS_SELECTOR: str = 'button[data-testid="send-button"]'
+VOICE_CSS_SELECTOR: str = 'button[data-testid="composer-speech-button"]'
+TEXTAREA_CSS_SELECTOR: str = 'div[contenteditable="true"]'
+ANSWER_XPATH: str = '//div[@data-message-author-role="assistant"]'
+PREFERED_RESPONSE_BUTTON_CSS_SELECTOR: str = 'button[data-testid="paragen-prefer-response-button"]'
 
 
-def check_if_chat_loaded(driver) -> bool:
-    driver.implicitly_wait(5)
+async def check_if_chat_loaded(page) -> bool:
     try:
-        button = driver.find_element(By.CSS_SELECTOR, SUBMIT_CSS_SELECTOR)
+        button = await wait_for_element(page, By.CSS_SELECTOR, VOICE_CSS_SELECTOR, timeout=5)
+        return button is not None
     except Exception as e:
-        logging.warning("Can't find submit button in chat interface. Maybe it's not loaded yet.")
+        logging.error(f"Error checking if chat loaded: {e}")
         return False
-    return button is not None
 
 
-def initialize_driver(config: Config):
-    logging.info("Initializing browser for Grok...")
-    driver = create_driver(config)
-    driver.get(URL)
-
-    while not check_if_chat_loaded(driver):
-        logging.info("Waiting for chat interface to load...")
-        time.sleep(5)
-    logging.info("Browser initialized")
-    return driver
-
-
-def send_request_and_get_response(driver, message):
-    logging.debug("Send request to chatbot interface")
-    driver.implicitly_wait(10)
-    textarea = driver.find_element(By.CSS_SELECTOR, "div[contenteditable='true']")
-    transfer_prompt(message, textarea)
-    wait = WebDriverWait(driver, TIMEOUT_SECONDS)
-    wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, SUBMIT_CSS_SELECTOR)))
-    submit_button = driver.find_element(By.CSS_SELECTOR, SUBMIT_CSS_SELECTOR)
-    logging.debug("Push submit button")
-    submit_button.click()
-
-    # Wait a little time to avoid early fail.
-    time.sleep(2)
-
-    # Wait for submit button to be available. It means answer is finished.
-    wait = WebDriverWait(driver, TIMEOUT_SECONDS)
-    wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, SUBMIT_DISABLE_CSS_SELECTOR)))
-
-    message_bubbles = driver.find_elements(By.XPATH, ANSWER_XPATH)
-    if not message_bubbles:
-        logging.warning("No message found.")
-        return ""
-    last_message_bubble = message_bubbles[-1]
-    html = last_message_bubble.get_attribute("outerHTML")
-    clean_message = clean_chat_answer(html)
-    logging.debug(f"Clean message ends with: {clean_message[-100:]}")
-    return clean_message
+async def wait_for_chat_to_load(page) -> bool:
+    """Wait for the chat interface to fully load."""
+    start_time = time.time()
+    while time.time() - start_time < TIMEOUT_SECONDS:
+        if await check_if_chat_loaded(page):
+            logging.info("Chat interface loaded successfully")
+            return True
+        await asyncio.sleep(1)
+    
+    logging.error("Chat interface failed to load within timeout")
+    return False
 
 
-def clean_chat_answer(html: str) -> str:
-    """
-    Find all DIVs containing code and remove unecessary decorations."
-    """
-    logging.debug("Clean chat answer")
-    soup = BeautifulSoup(html, "html.parser")
-    no_prose_divs = soup.find_all("pre")
-    for div in no_prose_divs:
-        if isinstance(div, Tag):
-            code_tags = div.find_all("code")
-            div.clear()
-            for code in code_tags:
-                div.append(code)
-            # Block code
-            code_tags = div.find_all("code")
-            for code_tag in code_tags:
-                code_tag.insert_before("```\n")
-                code_tag.insert_after("\n```\n")
-        else:
-            code_tags = []
-
-    # Inline code
-    code_tags = soup.find_all("code")
-    for code_tag in code_tags:
-        if code_tag.parent and code_tag.parent.name == "pre":
-            # Skip block code
-            continue
-        code_tag.insert_before("`")
-        code_tag.insert_after("`")
-    return soup.get_text().strip()
-
-
-def main():
-    driver = initialize_driver(Config())
+async def send_message(page, message: str) -> bool:
+    """Send a message to the chat interface."""
     try:
-        while True:
-            user_request = input("Ask something (or 'quit'): ")
-            if user_request.lower() == "quit":
-                break
-            response = send_request_and_get_response(driver, user_request)
-            print("Answer:", response)
+        # Find and click the textarea
+        textarea = await wait_for_element_visible(page, By.CSS_SELECTOR, TEXTAREA_CSS_SELECTOR)
+        if not textarea:
+            logging.error("Textarea not found")
+            return False
+        
+        # Transfer the prompt to the textarea
+        await transfer_prompt(message, textarea)
+        
+        # Find and click the send button
+        send_button = await wait_for_element_clickable(page, By.CSS_SELECTOR, SUBMIT_CSS_SELECTOR)
+        if not send_button:
+            logging.error("Send button not found")
+            return False
+        
+        await click_element(send_button)
+        logging.info("Message sent successfully")
+        return True
+        
+    except Exception as e:
+        logging.error(f"Error sending message: {e}")
+        return False
+
+
+async def wait_for_response(page) -> bool:
+    """Wait for the AI response to appear."""
+    try:
+        start_time = time.time()
+        while time.time() - start_time < TIMEOUT_SECONDS:
+            # Check if response has appeared
+            response_elements = await page.find(by=By.XPATH, value=ANSWER_XPATH, find_all=True)
+            if response_elements:
+                # Check if the last response is from assistant
+                last_response = response_elements[-1]
+                if await last_response.get_attribute("data-message-author-role") == "assistant":
+                    logging.info("Response received")
+                    return True
+            
+            await asyncio.sleep(1)
+        
+        logging.error("Response timeout")
+        return False
+        
+    except Exception as e:
+        logging.error(f"Error waiting for response: {e}")
+        return False
+
+
+async def get_last_response(page) -> str:
+    """Get the last AI response text."""
+    try:
+        response_elements = await page.find(by=By.XPATH, value=ANSWER_XPATH, find_all=True)
+        if response_elements:
+            last_response = response_elements[-1]
+            response_text = await last_response.text
+            return response_text.strip()
+        return ""
+        
+    except Exception as e:
+        logging.error(f"Error getting last response: {e}")
+        return ""
+
+
+async def check_for_preferred_response_button(page) -> bool:
+    """Check if there's a preferred response button and click it if present."""
+    try:
+        button = await find_element(page, By.CSS_SELECTOR, PREFERED_RESPONSE_BUTTON_CSS_SELECTOR)
+        if button:
+            await click_element(button)
+            logging.info("Clicked preferred response button")
+            return True
+        return False
+        
+    except Exception as e:
+        logging.error(f"Error checking for preferred response button: {e}")
+        return False
+
+
+async def chat_with_claude(page, message: str) -> str:
+    """Main function to chat with Claude."""
+    try:
+        # Send the message
+        if not await send_message(page, message):
+            return "Error: Failed to send message"
+        
+        # Wait for response
+        if not await wait_for_response(page):
+            return "Error: Response timeout"
+        
+        # Get the response
+        response = await get_last_response(page)
+        
+        # Check for preferred response button
+        await check_for_preferred_response_button(page)
+        
+        return response
+        
+    except Exception as e:
+        logging.error(f"Error in chat_with_claude: {e}")
+        return f"Error: {str(e)}"
+
+
+async def main():
+    """Main function to demonstrate the chat functionality."""
+    browser = None
+    try:
+        # Create browser
+        browser = await create_driver()
+        page = await browser.get_page()
+        
+        # Navigate to Claude
+        if not await navigate_to(page, URL):
+            logging.error("Failed to navigate to Claude")
+            return
+        
+        # Wait for chat to load
+        if not await wait_for_chat_to_load(page):
+            logging.error("Chat failed to load")
+            return
+        
+        # Example chat
+        message = "Hello! How are you today?"
+        response = await chat_with_claude(page, message)
+        print(f"Claude Response: {response}")
+        
+    except Exception as e:
+        logging.error(f"Error in main: {e}")
     finally:
-        driver.quit()
+        if browser:
+            await close_browser(browser)
 
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())
